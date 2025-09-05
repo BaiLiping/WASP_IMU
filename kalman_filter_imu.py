@@ -8,6 +8,14 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+from kalman_base import (
+    calculate_distance_traveled,
+    plot_trajectory,
+    plot_velocity,
+    plot_acceleration,
+    remove_gravity_bias,
+    estimate_measurement_noise
+)
 
 
 class KalmanFilter:
@@ -169,14 +177,11 @@ def process_imu_data_with_kalman(data, dt=None, remove_gravity=True):
     
     # Remove gravity/bias if requested
     if remove_gravity:
-        acc_x = acc_x - np.mean(acc_x)
-        acc_y = acc_y - np.mean(acc_y)
-        print(f"Removed bias - X: {np.mean(data['x'].values):.4f}, Y: {np.mean(data['y'].values):.4f}")
+        acc_x, acc_y, bias_x, bias_y = remove_gravity_bias(acc_x, acc_y)
+        print(f"Removed bias - X: {bias_x:.4f}, Y: {bias_y:.4f}")
     
-    # Calculate measurement noise from data covariance
-    acc_data = np.column_stack([acc_x, acc_y])
-    measurement_cov = np.cov(acc_data.T)
-    measurement_noise = np.sqrt(np.mean(np.diag(measurement_cov)))
+    # Calculate measurement noise from data
+    measurement_noise = estimate_measurement_noise(acc_x, acc_y)
     
     print(f"Estimated measurement noise: {measurement_noise:.6f}")
     
@@ -195,50 +200,6 @@ def process_imu_data_with_kalman(data, dt=None, remove_gravity=True):
     return kf
 
 
-def calculate_distance_traveled(kf):
-    """
-    Calculate distance from start to end position.
-    
-    Parameters:
-    -----------
-    kf : KalmanFilter
-        Fitted Kalman filter
-        
-    Returns:
-    --------
-    dict
-        Dictionary with distance metrics
-    """
-    history = np.array(kf.state_history)
-    
-    # Extract positions
-    positions = history[:, 0:2]  # x and y positions
-    
-    # Start and end positions
-    start_pos = positions[0]
-    end_pos = positions[-1]
-    
-    # Euclidean distance
-    euclidean_distance = np.linalg.norm(end_pos - start_pos)
-    
-    # Total path length (sum of all small movements)
-    path_distances = np.linalg.norm(np.diff(positions, axis=0), axis=1)
-    total_path_length = np.sum(path_distances)
-    
-    # Maximum displacement from origin
-    distances_from_origin = np.linalg.norm(positions, axis=1)
-    max_displacement = np.max(distances_from_origin)
-    
-    results = {
-        'start_position': start_pos,
-        'end_position': end_pos,
-        'euclidean_distance': euclidean_distance,
-        'total_path_length': total_path_length,
-        'max_displacement': max_displacement,
-        'displacement_vector': end_pos - start_pos
-    }
-    
-    return results
 
 
 def plot_kalman_results(kf, original_data, save_path='kalman_results.png'):
@@ -260,39 +221,14 @@ def plot_kalman_results(kf, original_data, save_path='kalman_results.png'):
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     
     # Plot 1: Position trajectory
-    ax = axes[0, 0]
-    ax.plot(history[:, 0], history[:, 1], 'b-', alpha=0.7, label='Filtered trajectory')
-    ax.plot(history[0, 0], history[0, 1], 'go', markersize=10, label='Start')
-    ax.plot(history[-1, 0], history[-1, 1], 'ro', markersize=10, label='End')
-    ax.set_xlabel('X Position (m)')
-    ax.set_ylabel('Y Position (m)')
-    ax.set_title('Position Trajectory')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
-    ax.axis('equal')
+    plot_trajectory(history, axes[0, 0])
     
     # Plot 2: Velocity over time
-    ax = axes[0, 1]
     time = np.arange(len(history)) * kf.dt
-    ax.plot(time, history[:, 2], 'b-', alpha=0.7, label='X velocity')
-    ax.plot(time, history[:, 3], 'r-', alpha=0.7, label='Y velocity')
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Velocity (m/s)')
-    ax.set_title('Velocity Estimates')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    plot_velocity(history, time, axes[0, 1])
     
     # Plot 3: Acceleration (filtered vs measured)
-    ax = axes[0, 2]
-    ax.plot(time, measurements[:, 0], 'b.', alpha=0.3, markersize=1, label='Measured X')
-    ax.plot(time, history[:, 4], 'b-', alpha=0.8, label='Filtered X')
-    ax.plot(time, measurements[:, 1], 'r.', alpha=0.3, markersize=1, label='Measured Y')
-    ax.plot(time, history[:, 5], 'r-', alpha=0.8, label='Filtered Y')
-    ax.set_xlabel('Time (s)')
-    ax.set_ylabel('Acceleration (m/s²)')
-    ax.set_title('Acceleration: Measured vs Filtered')
-    ax.legend()
-    ax.grid(True, alpha=0.3)
+    plot_acceleration(history, measurements, time, axes[0, 2])
     
     # Plot 4: Position over time
     ax = axes[1, 0]
@@ -357,7 +293,7 @@ def main():
     print("\n" + "=" * 60)
     print("DISTANCE CALCULATIONS")
     print("=" * 60)
-    distances = calculate_distance_traveled(kf)
+    distances = calculate_distance_traveled(kf.state_history)
     
     print(f"\nStart position: ({distances['start_position'][0]:.4f}, {distances['start_position'][1]:.4f}) m")
     print(f"End position: ({distances['end_position'][0]:.4f}, {distances['end_position'][1]:.4f}) m")
@@ -381,7 +317,7 @@ def main():
     print(f"Loaded {len(stats_data)} samples from statistics.txt")
     
     kf_stats = process_imu_data_with_kalman(stats_data, remove_gravity=True)
-    distances_stats = calculate_distance_traveled(kf_stats)
+    distances_stats = calculate_distance_traveled(kf_stats.state_history)
     
     print(f"\nStatistics file results:")
     print(f"Euclidean distance: {distances_stats['euclidean_distance']:.4f} m")
